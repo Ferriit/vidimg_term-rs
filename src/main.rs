@@ -284,9 +284,9 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
 
             if let Some(pixel) = image_struct.data.get(index) {
                 let [r, g, b] = *pixel;
+                let color_idx = rgb_to_16color(r, g, b);
 
-                if !BLACKWHITE {
-                    let color_idx = rgb_to_16color(r, g, b);
+                if !BLACKWHITE && color_idx != 7 && color_idx != 8 && color_idx != 15 {
                     attron(COLOR_PAIR((color_idx + 1) as i16));
                     addch(get_brightness_char(r, g, b).chars().next().unwrap_or(' ') as chtype);
                     attroff(COLOR_PAIR((color_idx + 1) as i16));
@@ -450,6 +450,13 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let _ = audio.kill();
+
+    // cleanup
+    let dir = Path::new("imgs");
+    if dir.exists() {
+        fs::remove_dir_all(dir)?; 
+    }
+
     Ok(())
 }
 
