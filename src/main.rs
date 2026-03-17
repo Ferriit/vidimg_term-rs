@@ -2,6 +2,7 @@ extern crate ncurses;
 use ncurses::*;
 use image::ImageReader as ImageReader;
 
+use std::env;
 use std::result::*;
 
 const WHITE_VALUE_THRESHOLD: f32 = 0.5;
@@ -12,6 +13,38 @@ struct IMG {
     height: u32,
     data: Vec<[u8; 3]>,
 }
+
+#[derive(Debug, PartialEq)]
+enum MediaType {
+    Image,
+    Video,
+    None,
+}
+
+fn get_type(name: &str) -> MediaType {
+    let name_lc = name.to_lowercase();
+
+    let video_formats = [
+        ".mp4", ".gif", ".mkv", ".mov", ".webm", ".avi", 
+        ".wmv", ".f4v", ".flv", ".m4v", ".3gp"
+    ];
+    
+    let image_formats = [
+        ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".ppm", 
+        ".pbm", ".pgm", ".bmp", ".ico", ".qoi", ".farbfeld", ".avif"
+    ];
+
+    if image_formats.iter().any(|&ext| name_lc.ends_with(ext)) {
+        return MediaType::Image;
+    }
+
+    if video_formats.iter().any(|&ext| name_lc.ends_with(ext)) {
+        return MediaType::Video;
+    }
+
+    MediaType::None
+}
+
 
 fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     let r_f = r as f32 / 255.0;
@@ -168,6 +201,14 @@ fn draw_image(image_struct: IMG) -> Result<(), Box<dyn std::error::Error>> {
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let argv: Vec<String> = env::args().collect();
+    let argc: usize = argv.len();
+    
+    if argc != 2 {
+        println!("Invalid amount of arguments. One required.");
+        return Ok(());
+    }
+
     initscr();
     cbreak();
     noecho();
@@ -183,7 +224,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_pair((i + 1) as i16, i as i16, 0); 
     }
 
-    draw_image(read_image("miku.jpg")?)?;
+    match get_type(&argv[1]) {
+        MediaType::Image => {
+            draw_image(read_image(&argv[1])?)?;
+        }
+        MediaType::Video => {
+            mvaddstr(0, 0, "Video not supported yet!")?;
+        }
+        _ => {
+            mvaddstr(0, 0, "Format not supported!")?;
+        }
+    }
 
     refresh();
     getch();
