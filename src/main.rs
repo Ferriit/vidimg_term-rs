@@ -240,7 +240,7 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
             1.0_f32, 
             1.0_f32,
             (cols - w) / 2, // Centering offset
-            (rows - h) / 2, // Centering offset
+            0,
         )
     } else {
         let term_aspect = (rows as f32 / cols as f32) * CHAR_ASPECT;
@@ -295,10 +295,6 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
         }
     }
 
-    mvaddstr(0, 0, format!("Mode: {} | {}x{} | Offset: {},{}", 
-        if native_size { "Native" } else { "Scaled" }, 
-        scaled_width, scaled_height, x_offset, y_offset).as_str())?;
-
     Ok(())
 }
 
@@ -323,35 +319,47 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     if dir.exists() {
         fs::remove_dir_all(dir)?; 
     }
-
     fs::create_dir_all("imgs/")?;
 
     let ffmpeg_cmd = format!(
         "ffmpeg -i {} -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%04d.png",
-        name, cols, rows * 2, cols, rows
+        name, cols, rows * 2 - 2, cols, rows
     );
     run_command_visible(&ffmpeg_cmd);
-    let frame_duration = Duration::from_millis((1000.0 / fps) as u64);
+    
+    let frame_duration = Duration::from_nanos((1_000_000_000.0 / fps) as u64);
 
     let mut audio = run_background(format!("mpv --no-video --quiet --no-terminal {}", name));
 
-    for path in fs::read_dir("./imgs/")? {
-        let now = Instant::now();
-        let entry = path?.path();
-        if let Some(img) = entry.to_str() {
+    let start_time = Instant::now();
+    let mut frame_count = 0;
+
+    let entries: Vec<_> = fs::read_dir("./imgs/")?.filter_map(|r| r.ok()).collect();
+
+    for entry in entries {
+        frame_count += 1;
+        let target_elapsed = frame_duration * frame_count;
+        let actual_elapsed = start_time.elapsed();
+
+        if actual_elapsed > target_elapsed {
+            continue; 
+        }
+
+        let path = entry.path();
+        if let Some(img) = path.to_str() {
             clear();
             draw_image(&read_image(img)?, true)?;
+            
             refresh();
         }
 
-        let elapsed = now.elapsed();
-        if frame_duration - elapsed >= Duration::from_millis(0) {
-            thread::sleep(frame_duration - elapsed);
+        let final_elapsed = start_time.elapsed();
+        if final_elapsed < target_elapsed {
+            thread::sleep(target_elapsed - final_elapsed);
         }
     }
 
-    audio.wait()?;
-
+    let _ = audio.kill();
     Ok(())
 }
 
