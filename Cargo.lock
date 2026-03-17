@@ -896,6 +896,7 @@ name = "vidimg_term-rs"
 version = "0.1.0"
 dependencies = [
  "image",
+ "libc",
  "ncurses",
 ]
 

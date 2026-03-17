@@ -1,4 +1,6 @@
 extern crate ncurses;
+extern crate libc;
+
 use ncurses::*;
 use image::ImageReader as ImageReader;
 use std::time::{Instant, Duration};
@@ -21,6 +23,14 @@ struct IMG {
     width: u32,
     height: u32,
     data: Vec<[u8; 3]>,
+}
+
+struct PlayerStatus {
+    playing: bool,
+    width: u32,
+    height: u32,
+    length: u32,
+    position: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -195,22 +205,14 @@ fn run_command(command: String) -> String {
 }
 
 fn run_background(command: String) -> Child {
-    if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", &command])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to execute process")
-    } else {
-        Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to execute process")
-    }
+    Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to execute process")
 }
 
 fn run_command_visible(command: &str) {
@@ -240,7 +242,7 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
             1.0_f32, 
             1.0_f32,
             (cols - w) / 2, // Centering offset
-            0,
+            -1,
         )
     } else {
         let term_aspect = (rows as f32 / cols as f32) * CHAR_ASPECT;
@@ -262,7 +264,7 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
             (image_struct.width as f32) / (w as f32),
             (image_struct.height as f32) / (h as f32),
             (cols - w) / 2, // Centering offset
-            (rows - h) / 2, // Centering offset
+            (rows - h) / 2,
         )
     };
 
@@ -298,10 +300,51 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+fn format_time(total_seconds: u32) -> String {
+    let f_seconds = total_seconds as f32;
+
+    let hours: f32 = f_seconds / 3600.0;
+    let minutes: f32 = (f_seconds % 3600.0) / 60.0;
+    let seconds: f32 = f_seconds % 60.0;
+
+    if hours.floor() > 0.0 {
+        // Formats as H:MM:SS with leading zeros for M and S
+        format!("{}:{:02}:{:02}", hours.floor(), minutes.floor(), seconds.floor())
+    } else {
+        // Formats as M:SS (standard for shorter videos)
+        format!("{:02}:{:02}", minutes.floor(), seconds.floor())
+    }
+}
+
+fn draw_bar(status: PlayerStatus) -> Result<(), Box<dyn std::error::Error>> {
+    let y_pos = status.height as i32 - 1;
+    let icon = if status.playing { "|> " } else { "|| " };
+    let time = format!(" {}/{} ", format_time(status.position), format_time(status.length));
+
+    let reserved_space = icon.len() as i32 + time.len() as i32 + 2;
+    let bar_max_width = (status.width as i32 - reserved_space).max(0);
+
+    let progress = status.position as f32 / status.length as f32;
+    let done_size = (bar_max_width as f32 * progress) as usize;
+    let todo_size = (bar_max_width as usize).saturating_sub(done_size);
+
+    mv(y_pos, 0);
+    clrtoeol(); // Clear the line first so old bars don't ghost
+    
+    addstr(icon)?;
+    addstr(&time)?;
+    addstr("[")?;
+    addstr(&"#".repeat(done_size))?;
+    addstr(&".".repeat(todo_size))?;
+    addstr("]")?;
+
+    Ok(())
+}
 
 fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     init_curses();
     let raw_fps = run_command(format!("ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 {}", name));
+
 
     // Extract FPS
     let fps = if let Some((num_str, den_str)) = raw_fps.trim().split_once('/') {
@@ -323,7 +366,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let ffmpeg_cmd = format!(
         "ffmpeg -i {} -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%04d.png",
-        name, cols, rows * 2 - 2, cols, rows
+        name, cols, rows * 2 - 3, cols, rows
     );
     run_command_visible(&ffmpeg_cmd);
     
@@ -336,9 +379,44 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let entries: Vec<_> = fs::read_dir("./imgs/")?.filter_map(|r| r.ok()).collect();
 
-    for entry in entries {
+    nodelay(stdscr(), true);
+
+    let mut is_paused = false;
+    let mut total_paused_duration = Duration::from_secs(0);
+
+    for entry in &entries {
+        let key = getch();
+        
+        if key == 32 { 
+            is_paused = !is_paused;
+
+            unsafe { libc::kill(audio.id() as i32, libc::SIGSTOP); } // Freeze mpv
+
+            if is_paused {
+                let pause_start = Instant::now();
+                while is_paused {
+                    let status = PlayerStatus {
+                        playing: false,
+                        width: cols as u32, // Use terminal size
+                        height: rows as u32,
+                        position: (frame_count as f32 / fps) as u32,
+                        length: (entries.len() as f32 / fps) as u32,
+                    };
+                    draw_bar(status)?;
+                    refresh();
+
+                    thread::sleep(Duration::from_millis(100));
+
+                    if getch() == 32 { is_paused = false; }
+                }
+            total_paused_duration += pause_start.elapsed();
+
+            unsafe { libc::kill(audio.id() as i32, libc::SIGCONT); } // Resume mpv
+            }
+        }
+
         frame_count += 1;
-        let target_elapsed = frame_duration * frame_count;
+        let target_elapsed = (frame_duration * frame_count) + total_paused_duration;
         let actual_elapsed = start_time.elapsed();
 
         if actual_elapsed > target_elapsed {
@@ -347,9 +425,21 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
         let path = entry.path();
         if let Some(img) = path.to_str() {
+            let img_obj = read_image(img)?;
+            // set up status
+            let status = PlayerStatus {
+                playing: true,
+                width: img_obj.width,
+                height: img_obj.height,
+                position: frame_count / fps as u32,
+                length: entries.len() as u32 / fps as u32,
+            };
+
             clear();
-            draw_image(&read_image(img)?, true)?;
-            
+            draw_image(&img_obj, true)?;
+           
+            draw_bar(status)?;
+
             refresh();
         }
 
