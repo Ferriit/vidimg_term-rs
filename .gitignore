@@ -21,6 +21,7 @@ target
 #.idea/
 
 miku.jpg
+imgs/*
 
 # Added by cargo
 

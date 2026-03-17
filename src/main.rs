@@ -1,12 +1,21 @@
 extern crate ncurses;
 use ncurses::*;
 use image::ImageReader as ImageReader;
+use std::time::{Instant, Duration};
+use std::thread;
 
 use std::env;
 use std::result::*;
+use std::process::{Command, Stdio, Child};
+use std::fs;
+use std::path::Path;
 
 const WHITE_VALUE_THRESHOLD: f32 = 0.5;
 const WHITE_SATURATION_THRESHOLD: f32 = 0.09375;
+
+const CHAR_ASPECT: f32 = 0.5;
+
+const BLACKWHITE: bool = false;
 
 struct IMG {
     width: u32,
@@ -169,34 +178,197 @@ fn rgb_to_16color(r: u8, g: u8, b: u8) -> usize {
     best_idx
 }
 
+fn run_command(command: String) -> String {
+    let output = if cfg!(target_os = "windows") {
+    Command::new("cmd")
+        .args(["/C", command.as_str()])
+        .output()
+        .expect("failed to execute process")
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .expect("failed to execute process")
+    };
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
 
-fn draw_image(image_struct: IMG) -> Result<(), Box<dyn std::error::Error>> {
-    let mut rows = 0;
-    let mut cols = 0;
+fn run_background(command: String) -> Child {
+    if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", &command])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to execute process")
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to execute process")
+    }
+}
 
-    getmaxyx(stdscr(), &mut rows, &mut cols);
-    
-    let inc_x: f32 = (image_struct.width as f32) / (cols as f32);
-    let inc_y: f32 = (image_struct.height as f32) / (rows as f32);
+fn run_command_visible(command: &str) {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("failed to execute process");
+}
 
-    for y in 0..rows {
-        for x in 0..cols {
-            mv(y, x);
-            let img_x = (x as f32 * inc_x) as u32;
-            let img_y = (y as f32 * inc_y) as u32;
+fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rows_raw = 0;
+    let mut cols_raw = 0;
+    getmaxyx(stdscr(), &mut rows_raw, &mut cols_raw);
+
+    let rows = rows_raw as i32;
+    let cols = cols_raw as i32;
+
+    let (scaled_height, scaled_width, inc_x, inc_y, x_offset, y_offset) = if native_size {
+        let h = image_struct.height as i32;
+        let w = image_struct.width as i32;
+        (
+            h,
+            w,
+            1.0_f32, 
+            1.0_f32,
+            (cols - w) / 2, // Centering offset
+            (rows - h) / 2, // Centering offset
+        )
+    } else {
+        let term_aspect = (rows as f32 / cols as f32) * CHAR_ASPECT;
+        let img_aspect = image_struct.height as f32 / image_struct.width as f32;
+
+        let (h, w) = if img_aspect > term_aspect {
+            let h_val = rows;
+            let w_val = (1.0_f32.max(h_val as f32 / img_aspect / CHAR_ASPECT)) as i32;
+            (h_val, w_val)
+        } else {
+            let w_val = cols;
+            let h_val = (1.0_f32.max(w_val as f32 * img_aspect * CHAR_ASPECT)) as i32;
+            (h_val, w_val)
+        };
+
+        (
+            h,
+            w,
+            (image_struct.width as f32) / (w as f32),
+            (image_struct.height as f32) / (h as f32),
+            (cols - w) / 2, // Centering offset
+            (rows - h) / 2, // Centering offset
+        )
+    };
+
+    for y in 0..scaled_height {
+        let draw_y = y + y_offset;
+        if draw_y >= rows || draw_y < 0 { continue; }
+
+        for x in 0..scaled_width {
+            let draw_x = x + x_offset;
+            if draw_x >= cols || draw_x < 0 { continue; }
+
+            mv(draw_y, draw_x);
+
+            let img_x = if native_size { x as u32 } else { ((x as f32 * inc_x) as u32).min(image_struct.width - 1) };
+            let img_y = if native_size { y as u32 } else { ((y as f32 * inc_y) as u32).min(image_struct.height - 1) };
             let index = (img_y * image_struct.width + img_x) as usize;
 
             if let Some(pixel) = image_struct.data.get(index) {
                 let [r, g, b] = *pixel;
-                let color_idx = rgb_to_16color(r, g, b);
-                attron(COLOR_PAIR((color_idx + 1) as i16));
-                addstr(get_brightness_char(r, g, b).as_str())?;
-                attroff(COLOR_PAIR((color_idx + 1) as i16));
+
+                if !BLACKWHITE {
+                    let color_idx = rgb_to_16color(r, g, b);
+                    attron(COLOR_PAIR((color_idx + 1) as i16));
+                    addch(get_brightness_char(r, g, b).chars().next().unwrap_or(' ') as chtype);
+                    attroff(COLOR_PAIR((color_idx + 1) as i16));
+                } else {
+                    addch(get_brightness_char(r, g, b).chars().next().unwrap_or(' ') as chtype);
+                }
             }
         }
     }
 
+    mvaddstr(0, 0, format!("Mode: {} | {}x{} | Offset: {},{}", 
+        if native_size { "Native" } else { "Scaled" }, 
+        scaled_width, scaled_height, x_offset, y_offset).as_str())?;
+
     Ok(())
+}
+
+
+fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    init_curses();
+    let raw_fps = run_command(format!("ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 {}", name));
+
+    // Extract FPS
+    let fps = if let Some((num_str, den_str)) = raw_fps.trim().split_once('/') {
+        let numerator: f32 = num_str.parse().unwrap_or(30.0);
+        let denominator: f32 = den_str.parse().unwrap_or(1.0);
+        numerator / denominator
+    } else {
+        30.0
+    };
+
+    let (mut rows, mut cols) = (0, 0);
+    getmaxyx(stdscr(), &mut rows, &mut cols);
+
+    let dir = Path::new("imgs");
+    if dir.exists() {
+        fs::remove_dir_all(dir)?; 
+    }
+
+    fs::create_dir_all("imgs/")?;
+
+    let ffmpeg_cmd = format!(
+        "ffmpeg -i {} -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%04d.png",
+        name, cols, rows * 2, cols, rows
+    );
+    run_command_visible(&ffmpeg_cmd);
+    let frame_duration = Duration::from_millis((1000.0 / fps) as u64);
+
+    let mut audio = run_background(format!("mpv --no-video --quiet --no-terminal {}", name));
+
+    for path in fs::read_dir("./imgs/")? {
+        let now = Instant::now();
+        let entry = path?.path();
+        if let Some(img) = entry.to_str() {
+            clear();
+            draw_image(&read_image(img)?, true)?;
+            refresh();
+        }
+
+        let elapsed = now.elapsed();
+        if frame_duration - elapsed >= Duration::from_millis(0) {
+            thread::sleep(frame_duration - elapsed);
+        }
+    }
+
+    audio.wait()?;
+
+    Ok(())
+}
+
+fn init_curses() {
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr(), true);
+    start_color();
+
+    if !has_colors() {
+        panic!("Terminal does not support colors");
+    }
+
+    for i in 0..16 {
+        init_pair((i + 1) as i16, i as i16, 0); 
+    }
 }
 
 
@@ -209,35 +381,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr(), true);
-    start_color();
-
-    if !has_colors() {
-        endwin();
-        panic!("Terminal does not support colors");
-    }
-
-    for i in 0..16 {
-        init_pair((i + 1) as i16, i as i16, 0); 
-    }
-
     match get_type(&argv[1]) {
         MediaType::Image => {
-            draw_image(read_image(&argv[1])?)?;
+            init_curses();
+            draw_image(&read_image(&argv[1])?, false)?;
+
+            refresh();
+            getch();
         }
         MediaType::Video => {
-            mvaddstr(0, 0, "Video not supported yet!")?;
+            play_video(&argv[1])?;
         }
         _ => {
             mvaddstr(0, 0, "Format not supported!")?;
         }
     }
 
-    refresh();
-    getch();
 
     endwin();
     Ok(())
