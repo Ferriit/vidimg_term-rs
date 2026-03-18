@@ -377,7 +377,8 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
     let mut frame_count = 0;
 
-    let entries: Vec<_> = fs::read_dir("./imgs/")?.filter_map(|r| r.ok()).collect();
+    let mut entries: Vec<_> = fs::read_dir("./imgs/")?.filter_map(|r| r.ok()).collect();
+    entries.sort_by_key(|entry| entry.path());
 
     nodelay(stdscr(), true);
 
