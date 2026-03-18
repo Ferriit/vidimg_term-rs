@@ -222,6 +222,7 @@ fn run_background(command: String) -> Child {
         .expect("failed to execute process")
 }
 
+#[allow(dead_code)]
 fn run_command_visible(command: &str) {
     let _ = Command::new("sh")
         .arg("-c")
