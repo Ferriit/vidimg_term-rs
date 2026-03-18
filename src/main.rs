@@ -38,6 +38,7 @@ enum MediaType {
     Image,
     Video,
     None,
+    Folder,
 }
 
 fn get_type(name: &str) -> MediaType {
@@ -52,6 +53,12 @@ fn get_type(name: &str) -> MediaType {
         ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".ppm", 
         ".pbm", ".pgm", ".bmp", ".ico", ".qoi", ".farbfeld", ".avif"
     ];
+
+    let path = Path::new(name);
+
+    if path.is_dir() {
+        return MediaType::Folder;
+    }
 
     if image_formats.iter().any(|&ext| name_lc.ends_with(ext)) {
         return MediaType::Image;
@@ -342,7 +349,6 @@ fn draw_bar(status: PlayerStatus) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    init_curses();
     let raw_fps = run_command(format!("ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 {}", name));
 
 
@@ -368,8 +374,11 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         "ffmpeg -i {} -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%04d.png",
         name, cols, rows * 2 - 3, cols, rows
     );
-    run_command_visible(&ffmpeg_cmd);
-    
+    clear();
+    mvaddstr(0, 0, "Processing video")?;
+    refresh();
+    run_command(ffmpeg_cmd);
+
     let frame_duration = Duration::from_nanos((1_000_000_000.0 / fps) as u64);
 
     let mut audio = run_background(format!("mpv --no-video --quiet --no-terminal {}", name));
@@ -461,6 +470,86 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    init_curses();
+
+    let path = Path::new(name);
+
+    if path.is_file() { // This function is only called for folders and images
+        draw_image(&read_image(name)?, false)?;
+        getch();
+    } else if path.is_dir() {
+        let mut entries: Vec<_> = fs::read_dir(name)?
+            .filter_map(|r| r.ok())
+            .collect();
+        entries.sort_by_key(|entry| entry.path());
+
+        let mut idx = 0;
+        let len = entries.len();
+
+        let mut prev_video: String = String::new();
+
+        loop {
+            curs_set(0);
+            let path = entries[idx].path();
+            if let Some(path_str) = path.to_str() {
+                clear();
+                match get_type(path_str) {
+                    MediaType::Image => {
+                        // Show loading bar
+                        mvaddstr(0, 0, "+-------+\n|Loading|\n+-------+")?;
+                        refresh();
+
+                        // Show image
+                        clear();
+                        draw_image(&read_image(path_str)?, false)?;
+                        refresh();
+                    }
+                    MediaType::Video => {
+                        if prev_video != path_str {
+                            clear();
+                            mvaddstr(0, 0, format!("Show video '{}'? (y/n){}", path_str, " ".repeat(50)).as_str())?;
+                            refresh();
+
+                            if getch() == 'y' as i32 {
+                                clear();
+                                play_video(path_str)?;
+
+                                // Flush leftover key presses
+                                while getch() != ERR {} // clear any buffered input
+                                nodelay(stdscr(), false);
+                            }
+
+                            prev_video = path_str.to_string();
+                        }
+                    }
+                    _ => { idx = (idx + 1) % len; continue; } // skip unknown files
+                }
+                
+                mvaddstr(0, 0, path_str)?;
+                refresh();
+            }
+
+
+            let key = getch();
+            if key == 27 || key == 'q' as i32 { break; }
+            else if key == KEY_RIGHT { idx = (idx + 1) % len; }
+            else if key == KEY_LEFT { idx = (idx + len - 1) % len; }
+
+            // thread::sleep(Duration::from_millis(50));
+        }
+    } else {
+        mvaddstr(0, 0, "Unable to read path!")?;
+        getch();
+    }
+
+
+
+    endwin();
+    Ok(())
+}
+
+
 fn init_curses() {
     initscr();
     cbreak();
@@ -479,30 +568,26 @@ fn init_curses() {
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_curses();
+
     let argv: Vec<String> = env::args().collect();
-    let argc: usize = argv.len();
-    
-    if argc != 2 {
+    if argv.len() != 2 {
         println!("Invalid amount of arguments. One required.");
         return Ok(());
     }
 
     match get_type(&argv[1]) {
-        MediaType::Image => {
-            init_curses();
-            draw_image(&read_image(&argv[1])?, false)?;
-
-            refresh();
-            getch();
+        MediaType::Image | MediaType::Folder => {
+            image_roll(&argv[1])?;
         }
         MediaType::Video => {
             play_video(&argv[1])?;
         }
         _ => {
             mvaddstr(0, 0, "Format not supported!")?;
+            getch();
         }
-    }
-
+    };
 
     endwin();
     Ok(())
