@@ -490,7 +490,7 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut prev_video: String = String::new();
 
         loop {
-            curs_set(0);
+            curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
             let path = entries[idx].path();
             if let Some(path_str) = path.to_str() {
                 clear();
@@ -542,8 +542,6 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         mvaddstr(0, 0, "Unable to read path!")?;
         getch();
     }
-
-
 
     endwin();
     Ok(())
