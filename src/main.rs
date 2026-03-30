@@ -2,6 +2,7 @@ extern crate ncurses;
 extern crate libc;
 
 use ncurses::*;
+use ncurses::setlocale;
 use image::ImageReader as ImageReader;
 use std::time::{Instant, Duration};
 use std::thread;
@@ -22,6 +23,7 @@ const WHITE_SATURATION_THRESHOLD: f32 = 0.1;//0.09375;
 const CHAR_ASPECT: f32 = 0.5;
 
 const BLACKWHITE: bool = false;
+
 
 struct IMG {
     width: u32,
@@ -155,8 +157,13 @@ fn get_brightness(r: u8, g: u8, b: u8) -> f32 {
     0.2126 * r_f + 0.7152 * g_f + 0.0722 * b_f
 }
 
-fn get_brightness_char(r: u8, g: u8, b: u8) -> String {
-    let chars = " .,\";*%#$";
+fn get_brightness_char(r: u8, g: u8, b: u8, unicode: bool) -> String {
+    let chars = if !unicode {
+        " .,\";*%#$"
+    }
+    else {
+        " ▁▂▃▄▅▆▇█"
+    };
 
     let chars_vec: Vec<char> = chars.chars().collect();
     let max_index = chars_vec.len().saturating_sub(1);
@@ -236,7 +243,7 @@ fn run_command_visible(command: &str) {
         .expect("failed to execute process");
 }
 
-fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn draw_image(image_struct: &IMG, native_size: bool, unicode: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut rows_raw = 0;
     let mut cols_raw = 0;
     getmaxyx(stdscr(), &mut rows_raw, &mut cols_raw);
@@ -299,10 +306,10 @@ fn draw_image(image_struct: &IMG, native_size: bool) -> Result<(), Box<dyn std::
 
                 if !BLACKWHITE && color_idx != 7 && color_idx != 8 && color_idx != 15 {
                     attron(COLOR_PAIR((color_idx + 1) as i16));
-                    addch(get_brightness_char(r, g, b).chars().next().unwrap_or(' ') as chtype);
+                    addch(get_brightness_char(r, g, b, unicode).chars().next().unwrap_or(' ') as chtype);
                     attroff(COLOR_PAIR((color_idx + 1) as i16));
                 } else {
-                    addch(get_brightness_char(r, g, b).chars().next().unwrap_or(' ') as chtype);
+                    addch(get_brightness_char(r, g, b, unicode).chars().next().unwrap_or(' ') as chtype);
                 }
             }
         }
@@ -362,7 +369,7 @@ fn mpv_command(socket: &str, cmd: &str) {
     }
 }
 
-fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn play_video(name: &str, unicode: bool) -> Result<(), Box<dyn std::error::Error>> {
     let raw_fps = run_command(format!("ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 {}", name));
 
 
@@ -524,7 +531,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             };
 
             clear();
-            draw_image(&img_obj, true)?;
+            draw_image(&img_obj, true, unicode)?;
            
             draw_bar(status)?;
 
@@ -548,13 +555,13 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn image_roll(name: &str, unicode: bool) -> Result<(), Box<dyn std::error::Error>> {
     init_curses();
 
     let path = Path::new(name);
 
     if path.is_file() { // This function is only called for folders and images
-        draw_image(&read_image(name)?, false)?;
+        draw_image(&read_image(name)?, false, unicode)?;
         getch();
     } else if path.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(name)?
@@ -579,7 +586,7 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
                         // Show image
                         clear();
-                        draw_image(&read_image(path_str)?, false)?;
+                        draw_image(&read_image(path_str)?, false, unicode)?;
                         refresh();
                     }
                     MediaType::Video => {
@@ -590,7 +597,7 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
                             if getch() == 'y' as i32 {
                                 clear();
-                                play_video(path_str)?;
+                                play_video(path_str, unicode)?;
 
                                 // Flush leftover key presses
                                 while getch() != ERR {} // clear any buffered input
@@ -626,6 +633,7 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 
 fn init_curses() {
+    let _ = setlocale(ncurses::LcCategory::all, "");
     initscr();
     cbreak();
     noecho();
@@ -637,8 +645,9 @@ fn init_curses() {
         panic!("Terminal does not support colors");
     }
 
+    use_default_colors();
     for i in 0..16 {
-        init_pair((i + 1) as i16, i as i16, 0); 
+        init_pair((i + 1) as i16, i as i16, -1); 
     }
 }
 
@@ -647,21 +656,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_curses();
 
     let argv: Vec<String> = env::args().collect();
-    if argv.len() != 2 {
-        println!("Invalid amount of arguments. One required.");
+    if argv.len() < 2 {
+        println!("Invalid amount of arguments. At least one required.");
         endwin();
         return Ok(());
     }
 
-    match get_type(&argv[1]) {
+    // let mut unicode: bool = false;
+
+    let mut path = "";
+
+    for i in &argv {
+        if i != "-u" && i != "--unicode" {
+            path = i;
+        }
+        //else {
+        //    unicode = true;
+        //}
+    }
+
+    match get_type(path) {
         MediaType::Image | MediaType::Folder => {
-            image_roll(&argv[1])?;
+            image_roll(path, false)?;
         }
         MediaType::Video => {
-            play_video(&argv[1])?;
+            play_video(path, false)?;
         }
         _ => {
-            mvaddstr(0, 0, "Format not supported!")?;
+            mvaddstr(0, 0, "Format not supported or path missing!")?;
             getch();
         }
     };
