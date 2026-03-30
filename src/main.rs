@@ -383,7 +383,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all("imgs/")?;
 
     let ffmpeg_cmd = format!(
-        "ffmpeg -i \"{}\" -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%09d.png",
+        "ffmpeg -i \"{}\" -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%50d.png",
         name, cols, rows * 2 - 3, cols, rows
     );
     clear();
