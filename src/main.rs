@@ -16,8 +16,8 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 
 
-const WHITE_VALUE_THRESHOLD: f32 = 0.5;
-const WHITE_SATURATION_THRESHOLD: f32 = 0.09375;
+const WHITE_VALUE_THRESHOLD: f32 = 0.25;
+const WHITE_SATURATION_THRESHOLD: f32 = 0.1;//0.09375;
 
 const CHAR_ASPECT: f32 = 0.5;
 
@@ -178,14 +178,12 @@ fn rgb_to_16color(r: u8, g: u8, b: u8) -> usize {
         return 15; // White
     }
 
-    // We re-calculate RGB from this "vibrant" HSV
     let (rn, gn, bn): (f32, f32, f32) = hsv_to_rgb(h, 1.0, v);
 
     let mut best_idx = 0;
     let mut best_dist = f32::INFINITY;
 
     for (idx, &(cr, cg, cb)) in std_16_colors.iter().enumerate() {
-        // Casting to f32 here prevents the subtraction overflow panic
         let dist = (rn - cr as f32).powi(2) * 0.3
                  + (gn - cg as f32).powi(2) * 0.59
                  + (bn - cb as f32).powi(2) * 0.11;
