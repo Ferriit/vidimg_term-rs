@@ -12,6 +12,10 @@ use std::process::{Command, Stdio, Child};
 use std::fs;
 use std::path::Path;
 
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+
+
 const WHITE_VALUE_THRESHOLD: f32 = 0.5;
 const WHITE_SATURATION_THRESHOLD: f32 = 0.09375;
 
@@ -349,6 +353,13 @@ fn draw_bar(status: PlayerStatus) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+
+fn mpv_command(socket: &str, cmd: &str) {
+    if let Ok(mut stream) = UnixStream::connect(socket) {
+        let _ = stream.write_all(format!("{}\n", cmd).as_bytes());
+    }
+}
+
 fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let raw_fps = run_command(format!("ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 {}", name));
 
@@ -382,9 +393,14 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let frame_duration = Duration::from_nanos((1_000_000_000.0 / fps) as u64);
 
-    let mut audio = run_background(format!("mpv --no-video --quiet --no-terminal \"{}\"", name));
+    let socket_path = "/tmp/mpv_socket";
 
-    let start_time = Instant::now();
+    let mut audio = run_background(format!(
+        "mpv --no-video --quiet --no-terminal --input-ipc-server={} \"{}\"",
+        socket_path, name
+    ));
+
+    let mut start_time = Instant::now();
     let mut frame_count = 0;
 
     let mut entries: Vec<_> = fs::read_dir("./imgs/")?.filter_map(|r| r.ok()).collect();
@@ -393,41 +409,86 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     nodelay(stdscr(), true);
 
     let mut is_paused = false;
-    let mut total_paused_duration = Duration::from_secs(0);
+    let total_paused_duration = Duration::from_secs(0);
 
-    for entry in &entries {
+    while frame_count < entries.len() {
+        let entry = &entries[frame_count];
         let key = getch();
         
-        if key == 32 { 
+        if key == 32 {
             is_paused = !is_paused;
-
-            unsafe { libc::kill(audio.id() as i32, libc::SIGSTOP); } // Freeze mpv
 
             if is_paused {
                 let pause_start = Instant::now();
+
+                mpv_command(socket_path, r#"{"command": ["set_property", "pause", true]}"#);
+
                 while is_paused {
                     let status = PlayerStatus {
                         playing: false,
-                        width: cols as u32, // Use terminal size
+                        width: cols as u32,
                         height: rows as u32,
                         position: (frame_count as f32 / fps) as u32,
                         length: (entries.len() as f32 / fps) as u32,
                     };
+
                     draw_bar(status)?;
                     refresh();
 
                     thread::sleep(Duration::from_millis(100));
 
-                    if getch() == 32 { is_paused = false; }
+                    if getch() == 32 {
+                        is_paused = false;
+                    }
                 }
-            total_paused_duration += pause_start.elapsed();
 
-            unsafe { libc::kill(audio.id() as i32, libc::SIGCONT); } // Resume mpv
+                start_time += pause_start.elapsed();
+
+                mpv_command(socket_path, r#"{"command": ["cycle", "pause"]}"#);
             }
         }
+        else if key == KEY_RIGHT {
+            frame_count += fps as usize * 5;
+
+            let seconds = frame_count as f32 / fps;
+            let cmd = format!(
+                "{{\"command\": [\"set_property\", \"time-pos\", {}]}}\n",
+                seconds
+            );
+            mpv_command(socket_path, &cmd);
+
+            start_time = Instant::now() - (frame_duration * frame_count as u32);
+        }
+        else if key == KEY_LEFT {
+            frame_count = frame_count.saturating_sub(fps as usize * 5);
+
+            let seconds = frame_count as f32 / fps;
+            let cmd = format!(
+                "{{\"command\": [\"set_property\", \"time-pos\", {}]}}\n",
+                seconds
+            );
+            mpv_command(socket_path, &cmd);
+
+            start_time = Instant::now() - (frame_duration * frame_count as u32);
+        }
+        else if key == 'q' as i32 {
+            // QUIT 
+
+            let _ = audio.kill();
+
+            // cleanup
+            let dir = Path::new("imgs");
+            if dir.exists() {
+                fs::remove_dir_all(dir)?; 
+            }
+
+            // exit
+            return Ok(());
+        }
+
 
         frame_count += 1;
-        let target_elapsed = (frame_duration * frame_count) + total_paused_duration;
+        let target_elapsed = (frame_duration * frame_count as u32) + total_paused_duration;
         let actual_elapsed = start_time.elapsed();
 
         if actual_elapsed > target_elapsed {
@@ -442,7 +503,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
                 playing: true,
                 width: img_obj.width,
                 height: img_obj.height,
-                position: frame_count / fps as u32,
+                position: (frame_count / fps as usize) as u32,
                 length: entries.len() as u32 / fps as u32,
             };
 
