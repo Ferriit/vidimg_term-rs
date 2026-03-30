@@ -162,7 +162,7 @@ fn get_brightness_char(r: u8, g: u8, b: u8, unicode: bool) -> String {
         " .,\";*%#$"
     }
     else {
-        " ▁▂▃▄▅▆▇█"
+        "  .:-=+*#%@█"
     };
 
     let chars_vec: Vec<char> = chars.chars().collect();
@@ -662,7 +662,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // let mut unicode: bool = false;
+    let mut unicode: bool = false;
 
     let mut path = "";
 
@@ -670,9 +670,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if i != "-u" && i != "--unicode" {
             path = i;
         }
-        //else {
-        //    unicode = true;
-        //}
+        else {
+            unicode = true;
+        }
     }
 
     match get_type(path) {
