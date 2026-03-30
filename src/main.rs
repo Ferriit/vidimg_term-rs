@@ -677,10 +677,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match get_type(path) {
         MediaType::Image | MediaType::Folder => {
-            image_roll(path, false)?;
+            image_roll(path, unicode)?;
         }
         MediaType::Video => {
-            play_video(path, false)?;
+            play_video(path, unicode)?;
         }
         _ => {
             mvaddstr(0, 0, "Format not supported or path missing!")?;
