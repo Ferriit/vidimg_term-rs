@@ -35,6 +35,7 @@ struct PlayerStatus {
     height: u32,
     length: u32,
     position: u32,
+    volume: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -348,6 +349,9 @@ fn draw_bar(status: PlayerStatus) -> Result<(), Box<dyn std::error::Error>> {
     addstr(&".".repeat(todo_size))?;
     addstr("]")?;
 
+    mv(y_pos - 1, 0);
+    addstr(format!("Vol: {}%", status.volume).as_str())?;
+
     Ok(())
 }
 
@@ -398,6 +402,8 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         socket_path, name
     ));
 
+    let mut volume = 100;
+
     let mut start_time = Instant::now();
     let mut frame_count = 0;
 
@@ -428,6 +434,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
                         height: rows as u32,
                         position: (frame_count as f32 / fps) as u32,
                         length: (entries.len() as f32 / fps) as u32,
+                        volume: volume
                     };
 
                     draw_bar(status)?;
@@ -445,6 +452,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
                 mpv_command(socket_path, r#"{"command": ["cycle", "pause"]}"#);
             }
         }
+        // TIME CHANGES
         else if key == KEY_RIGHT {
             frame_count += fps as usize * 5;
 
@@ -469,9 +477,18 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
             start_time = Instant::now() - (frame_duration * frame_count as u32);
         }
+        // VOLUME CHANGES
+        else if key == KEY_UP && volume < 100 {
+            mpv_command(socket_path, r#"{"command": ["add", "volume", 5]}"#);
+            volume += 5;
+        }
+        else if key == KEY_DOWN && volume >= 5 {
+            mpv_command(socket_path, r#"{"command": ["add", "volume", -5]}"#);
+            volume -= 5;
+        }
+
         else if key == 'q' as i32 {
             // QUIT 
-
             let _ = audio.kill();
 
             // cleanup
@@ -503,6 +520,7 @@ fn play_video(name: &str) -> Result<(), Box<dyn std::error::Error>> {
                 height: img_obj.height,
                 position: (frame_count / fps as usize) as u32,
                 length: entries.len() as u32 / fps as u32,
+                volume: volume
             };
 
             clear();
@@ -550,7 +568,6 @@ fn image_roll(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut prev_video: String = String::new();
 
         loop {
-            curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
             let path = entries[idx].path();
             if let Some(path_str) = path.to_str() {
                 clear();
@@ -614,6 +631,7 @@ fn init_curses() {
     noecho();
     keypad(stdscr(), true);
     start_color();
+    curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
 
     if !has_colors() {
         panic!("Terminal does not support colors");
@@ -631,6 +649,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let argv: Vec<String> = env::args().collect();
     if argv.len() != 2 {
         println!("Invalid amount of arguments. One required.");
+        endwin();
         return Ok(());
     }
 
