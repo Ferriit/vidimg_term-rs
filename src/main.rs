@@ -662,7 +662,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let mut unicode: bool = false;
+    //let mut unicode: bool = false;
 
     let mut path = "";
 
@@ -670,17 +670,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if i != "-u" && i != "--unicode" {
             path = i;
         }
-        else {
-            unicode = true;
-        }
+        //else {
+        //    unicode = true;
+        //}
     }
 
     match get_type(path) {
         MediaType::Image | MediaType::Folder => {
-            image_roll(path, unicode)?;
+            image_roll(path, false)?;
         }
         MediaType::Video => {
-            play_video(path, unicode)?;
+            play_video(path, false)?;
         }
         _ => {
             mvaddstr(0, 0, "Format not supported or path missing!")?;
