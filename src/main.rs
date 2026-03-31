@@ -162,7 +162,7 @@ fn get_brightness_char(r: u8, g: u8, b: u8, unicode: bool) -> String {
         " .,\";*%#$"
     }
     else {
-        "  .:-=+*#%@█"
+        "  .:-=+*#%@"
     };
 
     let chars_vec: Vec<char> = chars.chars().collect();
@@ -662,25 +662,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    //let mut unicode: bool = false;
+    // Variable was already called "unicode". Now it just signifies the second character set 
+    let mut unicode: bool = false;
 
     let mut path = "";
 
     for i in &argv {
-        if i != "-u" && i != "--unicode" {
+        if i != "-2" && i != "--set2" {
             path = i;
         }
-        //else {
-        //    unicode = true;
-        //}
+        else {
+            unicode = true;
+        }
     }
 
     match get_type(path) {
         MediaType::Image | MediaType::Folder => {
-            image_roll(path, false)?;
+            image_roll(path, unicode)?;
         }
         MediaType::Video => {
-            play_video(path, false)?;
+            play_video(path, unicode)?;
         }
         _ => {
             mvaddstr(0, 0, "Format not supported or path missing!")?;
