@@ -207,10 +207,10 @@ fn rgb_to_16color(r: u8, g: u8, b: u8) -> usize {
 
 fn run_command(command: String) -> String {
     let output = if cfg!(target_os = "windows") {
-    Command::new("cmd")
-        .args(["/C", command.as_str()])
-        .output()
-        .expect("failed to execute process")
+        Command::new("cmd")
+            .args(["/C", command.as_str()])
+            .output()
+            .expect("failed to execute process")
     } else {
         Command::new("sh")
             .arg("-c")
@@ -218,7 +218,15 @@ fn run_command(command: String) -> String {
             .output()
             .expect("failed to execute process")
     };
-    String::from_utf8_lossy(&output.stdout).to_string()
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !stderr.is_empty() {
+        eprintln!("YT-DLP ERROR:\n{}", stderr);
+    }
+
+    stdout.to_string()
 }
 
 fn run_background(command: String) -> Child {
@@ -632,6 +640,105 @@ fn image_roll(name: &str, unicode: bool) -> Result<(), Box<dyn std::error::Error
 }
 
 
+fn strip_unicode(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii())
+        .collect()
+}
+
+
+fn load_videos(query: &str, page: usize, page_size: usize) -> Vec<(String, String)> {
+    let start = page * page_size + 1;
+    let end = start + page_size - 1;
+
+    let cmd = format!(
+        "yt-dlp \"ytsearch{}:{}\" --playlist-items {}:{} --print \"%(title)s|%(webpage_url)s\"",
+        end, query, start, end
+    );
+
+    let output = run_command(cmd);
+
+    output
+        .lines()
+        .filter_map(|line| {
+            let (title, url) = line.rsplit_once('|')?;
+
+            Some((
+                strip_unicode(title),
+                url.to_string(),
+            ))
+        })
+        .collect()
+}
+
+
+fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
+    let mut searching = false;
+    let mut query: String = String::new();
+
+    let mut results: Vec<(String, String)> = Vec::new();
+
+    let mut width = 0;
+    let mut height = 0;
+
+    nodelay(stdscr(), true);
+
+    loop {
+        getmaxyx(stdscr(), &mut height, &mut width);
+        clear();
+
+        mvaddstr(1, 0, "-".repeat(width as usize).as_str())?;
+        mvaddstr(0, 0, &query)?;
+
+        let key = getch();
+
+        if !searching {
+            // Toggle search status
+            match key {
+                9 => {
+                    searching = true;
+                }
+
+                _ => {}
+            }
+        }
+        else {
+            match key {
+                ncurses::KEY_ENTER => {
+                    searching = false;
+                    clear();
+                    mvaddstr(4, 0, "Loading...")?;
+                    refresh();
+
+
+                    results = load_videos(query.as_str(), 0, 1);
+                }
+
+                ncurses::KEY_BACKSPACE => {
+                    query.pop();
+                }
+
+                -1 => {}
+
+                _ => {
+                    let c = char::from_u32(key as u32).unwrap();
+                    let s: String = c.to_string();
+                    let slice: &str = &s;
+
+                    query += slice;
+                }
+            }
+        }
+
+
+
+        refresh();
+    }
+
+    Ok(())
+}
+
+
 fn init_curses() {
     let _ = setlocale(ncurses::LcCategory::all, "");
     initscr();
@@ -663,31 +770,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Variable was already called "unicode". Now it just signifies the second character set 
-    let mut unicode: bool = false;
+    let mut unicode = false;
+    let mut youtube = false;
 
-    let mut path = "";
+    let mut path = String::new();
 
-    for i in &argv {
-        if i != "-2" && i != "--set2" {
-            path = i;
-        }
-        else {
-            unicode = true;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-2" | "--set2" => unicode = true,
+            "-yt" | "--youtube" => youtube = true,
+            _ => path = arg
         }
     }
 
-    match get_type(path) {
-        MediaType::Image | MediaType::Folder => {
-            image_roll(path, unicode)?;
-        }
-        MediaType::Video => {
-            play_video(path, unicode)?;
-        }
-        _ => {
-            mvaddstr(0, 0, "Format not supported or path missing!")?;
-            getch();
-        }
-    };
+    if !youtube {
+        match get_type(path.as_str()) {
+            MediaType::Image | MediaType::Folder => {
+                image_roll(path.as_str(), unicode)?;
+            }
+            MediaType::Video => {
+                play_video(path.as_str(), unicode)?;
+            }
+            _ => {
+                mvaddstr(0, 0, "Format not supported or path missing!")?;
+                getch();
+            }
+        };
+    }
+    else {
+        youtube_ui()?;
+    }
 
     endwin();
     Ok(())
