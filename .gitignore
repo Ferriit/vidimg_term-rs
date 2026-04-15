@@ -25,6 +25,8 @@ gabriel.mp4
 bad_apple.mp4
 imgs/*
 
+vidimg_yt_dlp/*
+
 # Added by cargo
 
 /target

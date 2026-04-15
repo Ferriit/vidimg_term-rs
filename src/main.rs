@@ -15,6 +15,7 @@ use std::path::Path;
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
+use glob::glob;
 
 
 const WHITE_VALUE_THRESHOLD: f32 = 0.25;
@@ -400,7 +401,7 @@ fn play_video(name: &str, unicode: bool) -> Result<(), Box<dyn std::error::Error
     fs::create_dir_all("imgs/")?;
 
     let ffmpeg_cmd = format!(
-        "ffmpeg -i \"{}\" -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%50d.png",
+        "ffmpeg -i \"{}\" -vf \"scale={}:{}:force_original_aspect_ratio=decrease,scale=iw:ih*0.5,pad={}:{}:(ow-iw)/2:(oh-ih)/2,setsar=1\" -sws_flags neighbor imgs/image%50d.png -threads 0",
         name, cols, rows * 2 - 3, cols, rows
     );
     clear();
@@ -672,6 +673,19 @@ fn load_videos(query: &str, page: usize, page_size: usize) -> Vec<(String, Strin
 }
 
 
+fn find_downloaded_file() -> Option<String> {
+    let pattern = "vidimg_yt_dlp/yt.*";
+
+    if let Ok(mut entries) = glob(pattern) {
+        if let Some(Ok(path)) = entries.next() {
+            return Some(path.display().to_string());
+        }
+    }
+    
+    None
+}
+
+
 fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
     let mut searching = false;
     let mut query: String = String::new();
@@ -681,40 +695,99 @@ fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
     let mut width = 0;
     let mut height = 0;
 
+    let mut update = false;
+
+    let mut curs_pos = 0;
+
     nodelay(stdscr(), true);
 
     loop {
         getmaxyx(stdscr(), &mut height, &mut width);
-        clear();
 
         mvaddstr(1, 0, "-".repeat(width as usize).as_str())?;
         mvaddstr(0, 0, &query)?;
 
         let key = getch();
 
+        if key == -1 && !update {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        }
+
+        update = false;
+
+        clear();
+
         if !searching {
+            curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
             // Toggle search status
             match key {
                 9 => {
                     searching = true;
                 }
 
+                val if val == 'q' as i32 => {
+                    break;
+                }
+
+                10 | KEY_ENTER => {
+                    if results.is_empty() { continue; }
+                
+                    run_command("mkdir -p vidimg_yt_dlp".to_string());
+                
+                    let (_title, url) = &results[curs_pos];
+
+                    clear();
+                    mvaddstr(0, 0, "Downloading video...")?;
+                    refresh();
+
+                    run_command(format!("yt-dlp -f \"ba+bv/b\" -o \"vidimg_yt_dlp/yt.%(ext)s\" \"{}\"", url));
+                
+                    if let Some(path) = find_downloaded_file() {
+                        play_video(&path, false)?;
+                    } else {
+                        println!("Error: Download failed or file not found.");
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
+                
+                    run_command("rm -rf vidimg_yt_dlp".to_string());
+                
+                    refresh(); 
+                }
+
                 _ => {}
+            }
+
+            if !results.is_empty() {
+                match key {
+                    KEY_DOWN => {
+                        curs_pos = (curs_pos + 1) % results.len();
+                    }
+                    KEY_UP => {
+                        if curs_pos == 0 {
+                            curs_pos = results.len() - 1; // Wrap to bottom
+                        } else {
+                            curs_pos -= 1;
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         else {
+            curs_set(CURSOR_VISIBILITY::CURSOR_VISIBLE);
             match key {
-                ncurses::KEY_ENTER => {
+                KEY_ENTER | 10 => {
                     searching = false;
-                    clear();
-                    mvaddstr(4, 0, "Loading...")?;
+                    mvaddstr(2, 0, "Loading...")?;
                     refresh();
 
+                    results = load_videos(query.as_str(), 0, 10);
 
-                    results = load_videos(query.as_str(), 0, 1);
+                    update = true;
                 }
 
-                ncurses::KEY_BACKSPACE => {
+                KEY_BACKSPACE => {
                     query.pop();
                 }
 
@@ -730,10 +803,17 @@ fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-
+        for (i, (title, _url)) in results.iter().enumerate() {
+            mv((i + 2) as i32, 2);
+            addstr(&title)?;
+            if i == curs_pos {
+                mvaddch((i + 2) as i32, 0, '>' as u32);
+            }
+        }
 
         refresh();
     }
+
 
     Ok(())
 }
