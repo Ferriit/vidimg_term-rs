@@ -745,6 +745,7 @@ fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
                 
                     if let Some(path) = find_downloaded_file() {
                         play_video(&path, false)?;
+                        clear();
                     } else {
                         println!("Error: Download failed or file not found.");
                         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -805,7 +806,7 @@ fn youtube_ui() -> Result<(), Box<dyn std::error::Error>> {
 
         for (i, (title, _url)) in results.iter().enumerate() {
             mv((i + 2) as i32, 2);
-            addstr(&title)?;
+            addstr(title)?;
             if i == curs_pos {
                 mvaddch((i + 2) as i32, 0, '>' as u32);
             }
