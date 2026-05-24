@@ -416,7 +416,7 @@ fn play_video(name: &str, unicode: bool) -> Result<(), Box<dyn std::error::Error
     let mut audio = run_background(format!(
         "mpv --no-video --quiet --no-terminal --input-ipc-server={} \"{}\"",
         socket_path, name
-    ));
+    )).wait();
 
     let mut volume = 100;
 
